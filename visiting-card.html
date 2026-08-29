@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#ff8500">
+<title>Visiting Card Scanner — SHREE JI CONNECT</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f6f8;color:#171717;font-family:Arial,sans-serif}
+header{background:#111;color:#fff;padding:20px 18px;border-bottom:5px solid #ff8500}
+header h1{margin:0;font-size:24px}header p{margin:5px 0 0;color:#aaa}
+main{max-width:760px;margin:auto;padding:18px}.card{background:#fff;border:1px solid #ddd;border-radius:20px;padding:18px;margin-bottom:16px;box-shadow:0 2px 8px #0000000b}
+label{display:block;font-weight:700;margin:14px 0 7px}
+input,textarea{width:100%;padding:14px;border:1px solid #ccc;border-radius:12px;font-size:16px;background:#fff}
+textarea{min-height:100px;resize:vertical}
+.preview{width:100%;max-height:430px;object-fit:contain;border-radius:14px;background:#eee;display:none;margin-top:14px}
+.row{display:flex;gap:10px;flex-wrap:wrap}.btn{border:0;border-radius:12px;padding:13px 17px;font-size:16px;font-weight:700;cursor:pointer}
+.orange{background:#ff8500;color:#fff}.green{background:#188b45;color:#fff}.dark{background:#111;color:#fff}.gray{background:#eee;color:#222}
+#file{display:none}.status{padding:12px;border-radius:10px;background:#fff3df;margin-top:12px;display:none;line-height:1.45}
+.progress{height:8px;background:#eee;border-radius:10px;overflow:hidden;margin-top:10px;display:none}
+.progress i{display:block;height:100%;width:0;background:#ff8500;transition:width .2s}
+.small{font-size:13px;color:#777;line-height:1.5}
+</style>
+</head>
+<body>
+<header><h1>SHREE JI CONNECT</h1><p>Visiting Card Scanner • Auto OCR</p></header>
+<main>
+<section class="card">
+  <div class="row">
+    <label class="btn orange" for="file">📷 Take / Choose Card Photo</label>
+    <button class="btn dark" id="scan" disabled>🔎 Scan Automatically</button>
+  </div>
+  <input id="file" type="file" accept="image/*" capture="environment">
+  <img id="preview" class="preview" alt="Visiting card preview">
+  <div id="status" class="status"></div>
+  <div id="progress" class="progress"><i id="bar"></i></div>
+  <p class="small">Photo எடுத்தவுடன் OCR தானாக இயங்கும். Text கிடைத்ததும் Name, Mobile, Company, City, Address fields auto-fill ஆகும். Save செய்வதற்கு முன் ஒரு முறை check செய்யலாம்.</p>
+</section>
+
+<section class="card">
+  <label>Name</label><input id="name" autocomplete="name" placeholder="Auto detected name">
+  <label>Mobile</label><input id="mobile" autocomplete="tel" placeholder="Auto detected mobile">
+  <label>Company</label><input id="company" placeholder="Auto detected company">
+  <label>City</label><input id="city" placeholder="Auto detected city">
+  <label>Address</label><textarea id="address" placeholder="Auto detected address"></textarea>
+  <label>OCR Text</label><textarea id="raw" placeholder="Detected text"></textarea>
+  <div class="row">
+    <button class="btn orange" id="save">💾 Save Customer</button>
+    <button class="btn gray" id="copy">📋 Copy Details</button>
+  </div>
+</section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+let selectedFile=null, lastText="";
+
+function setStatus(t,show=true){$("status").textContent=t;$("status").style.display=show?"block":"none";}
+function setProgress(v){$("progress").style.display="block";$("bar").style.width=Math.round(v*100)+"%";}
+
+$("file").addEventListener("change", async e=>{
+  selectedFile=e.target.files && e.target.files[0];
+  if(!selectedFile)return;
+  $("preview").src=URL.createObjectURL(selectedFile);
+  $("preview").style.display="block";
+  $("scan").disabled=false;
+  await scanCard();
+});
+$("scan").onclick=scanCard;
+
+async function makeOCRImage(file){
+  const bmp=await createImageBitmap(file);
+  const max=1800, scale=Math.min(1,max/Math.max(bmp.width,bmp.height));
+  const c=document.createElement("canvas");
+  c.width=Math.max(900,Math.round(bmp.width*scale));
+  c.height=Math.max(600,Math.round(bmp.height*scale));
+  const x=c.getContext("2d",{willReadFrequently:true});
+  x.drawImage(bmp,0,0,c.width,c.height);
+  const im=x.getImageData(0,0,c.width,c.height), d=im.data;
+  for(let i=0;i<d.length;i+=4){
+    let g=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+    g=(g-128)*1.35+128;
+    g=Math.max(0,Math.min(255,g));
+    d[i]=d[i+1]=d[i+2]=g;
+  }
+  x.putImageData(im,0,0);
+  return c.toDataURL("image/jpeg",0.95);
+}
+
+async function scanCard(){
+  if(!selectedFile)return;
+  $("scan").disabled=true;
+  setStatus("🔎 Starting OCR… Please keep this page open.");
+  setProgress(0);
+  try{
+    if(!window.Tesseract) throw new Error("OCR library did not load. Check internet and reload.");
+    const img=await makeOCRImage(selectedFile);
+    const result=await Tesseract.recognize(img,"eng",{
+      logger:m=>{
+        if(m.status==="loading tesseract core") setStatus("⚙️ Loading OCR engine…");
+        else if(m.status==="loading language traineddata") setStatus("📚 Loading English OCR data…");
+        else if(m.status==="recognizing text"){
+          const p=m.progress||0; setStatus("🔎 Reading card… "+Math.round(p*100)+"%"); setProgress(p);
+        }
+      }
+    });
+    lastText=(result.data.text||"").replace(/\r/g,"").trim();
+    $("raw").value=lastText;
+    if(!lastText) throw new Error("No text detected");
+    fillFields(lastText);
+    setProgress(1);
+    setStatus("✅ Scan complete. Details auto-filled — please check and Save.");
+  }catch(err){
+    console.error(err);
+    setStatus("❌ OCR could not read this photo. Use a clear, close-up photo with the card filling most of the frame, then tap Scan Automatically.");
+  }finally{$("scan").disabled=false}
+}
+
+function ls(text){return text.split("\n").map(s=>s.replace(/[|]+/g," ").replace(/\s+/g," ").trim()).filter(Boolean)}
+
+function fillFields(text){
+  const a=ls(text), low=text.toLowerCase();
+
+  // Phone: supports Indian and international numbers, avoids years/short numbers.
+  const nums=text.match(/(?:\+?\d[\d\s().-]{7,}\d)/g)||[];
+  const phones=nums.map(s=>s.trim()).filter(s=>s.replace(/\D/g,"").length>=8);
+  $("mobile").value=phones[0]||"";
+
+  const email=a.find(s=>/@/.test(s))||"";
+  const phoneLine=a.find(s=>/(ph|phone|mobile|mob|tel)\b/i.test(s))||"";
+
+  // Company: prefer a line containing business keywords, otherwise the prominent
+  // non-address line before the contact/address lines.
+  const company=a.find(s=>/(gold|diamond|jewell|jewel|traders|stores|store|company|llp|ltd|pvt|inc)\b/i.test(s) && s.length<80) || "";
+  $("company").value=company;
+
+  const addressWords=/(nagar|road|street|st\.?|avenue|ave\.?|park|pl\.?|lane|ln\.?|nagar|district|dist\.?|pin|pincode|bc\b|on\b|ca\b|india|canada|usa|via\b)/i;
+  const addressParts=a.filter(s=>s!==email && s!==phoneLine && addressWords.test(s) && !/^\d{4,}$/.test(s));
+  $("address").value=addressParts.join(", ");
+
+  // City detection: known city first; then a line with postal-code style location.
+  const cityRe=/\b(Coimbatore|Chennai|Madurai|Bengaluru|Bangalore|Mumbai|Delhi|Pune|Abbotsford|Vancouver|Toronto|Thrissur|Ollur|Kochi|Ernakulam|Calicut|Kozhikode)\b/i;
+  let city=(text.match(cityRe)||[""])[0];
+  if(!city){
+    const postal=a.find(s=>/\b[A-Z]{1,2}\s?\d[A-Z]?\s?\d[A-Z]{2}\b/i.test(s));
+    if(postal) city=(postal.split(",")[0]||"").trim();
+  }
+  $("city").value=city;
+
+  // Name: choose a person-like line. Exclude brand/company/contact/address lines.
+  const excluded=/(gold|diamond|jewell|jewel|trader|store|company|llp|ltd|pvt|inc|phone|mobile|mob|tel|email|www|http|road|street|avenue|park|nagar|pin|pincode|all kinds|christopher|cedar|pl|via|ollur|thrissur|abbotsford)/i;
+  const nameCandidates=a.filter(s=>{
+    const words=s.split(/\s+/);
+    return s.length>=4 && s.length<=45 && words.length>=1 && words.length<=5 &&
+      !/@/.test(s) && !/\d{5,}/.test(s) && !excluded.test(s);
+  });
+  let name=nameCandidates[0]||"";
+  // If there are multiple short candidates, prefer a likely two/three-word person name.
+  const person=nameCandidates.find(s=>s.split(/\s+/).length>=2 && s.split(/\s+/).length<=3);
+  if(person) name=person;
+  $("name").value=name;
+}
+
+$("copy").onclick=async()=>{
+  const t=`Name: ${$("name").value}\nMobile: ${$("mobile").value}\nCompany: ${$("company").value}\nCity: ${$("city").value}\nAddress: ${$("address").value}`;
+  try{await navigator.clipboard.writeText(t);setStatus("✅ Details copied.");}
+  catch(e){setStatus("⚠️ Copy not available. Select and copy the details manually.");}
+};
+
+$("save").onclick=()=>{
+  const customer={
+    id:Date.now(),
+    name:$("name").value.trim(),
+    mobile:$("mobile").value.trim(),
+    company:$("company").value.trim(),
+    city:$("city").value.trim(),
+    address:$("address").value.trim(),
+    createdAt:new Date().toISOString()
+  };
+  if(!customer.name && !customer.mobile){alert("Please scan the card or enter at least Name / Mobile.");return}
+  // Use the main app's most common customer key first.
+  const key="customers";
+  try{
+    const old=JSON.parse(localStorage.getItem(key)||"[]");
+    const arr=Array.isArray(old)?old:[];
+    arr.push(customer);
+    localStorage.setItem(key,JSON.stringify(arr));
+    setStatus("✅ Customer saved successfully. Open Customers to verify.");
+  }catch(e){setStatus("⚠️ Could not save customer in browser storage.");}
+};
+</script>
+</body>
+</html>
